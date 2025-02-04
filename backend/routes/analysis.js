@@ -1,34 +1,69 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const path = require('path');
+const modelLoader = require('../services/ai/modelLoader');
 
-// Configure multer to store file in memory
-const storage = multer.memoryStorage();
+// Enhanced logging middleware
+const logRequestDetails = (req, res, next) => {
+  console.log('Request Headers:', req.headers);
+  console.log('Content-Type:', req.headers['content-type']);
+  console.log('Request Body:', req.body);
+  next();
+};
+
 const upload = multer({
-    storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-    fileFilter: (req, file, cb) => {
-        const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-        if (allowedTypes.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Invalid file type. Only JPEG and PNG allowed.'));
-        }
-    }
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  }
 });
 
-const { analyzeSkin } = require('../controllers/analysisController');
+router.post('/analyze', 
+  logRequestDetails,
+  (req, res, next) => {
+    upload.single('image')(req, res, (err) => {
+      if (err) {
+        console.error('Multer Error:', err);
+        return res.status(400).json({ 
+          success: false, 
+          error: err.message || 'Upload failed' 
+        });
+      }
+      next();
+    });
+  }, 
+  async (req, res) => {
+    try {
+      console.log('Received File:', req.file);
+      
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'No image uploaded' 
+        });
+      }
 
-// routes/analysis.js (temporary test route)
-router.get('/test', (req, res) => {
-    res.json({ message: "API connected!" });
-  });
+      const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
 
-router.post('/analyze', upload.single('image'), (req, res, next) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No image provided' });
+      const result = await modelLoader.predict(base64Image);
+
+      res.json({
+        success: true,
+        analysis: {
+          predictions: result.predictions,
+          annotatedImage: result.annotatedImage
+        }
+      });
+
+    } catch (error) {
+      console.error('Full Error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Processing failed'
+      });
     }
-    next();
-}, analyzeSkin);
+  }
+);
 
 module.exports = router;
