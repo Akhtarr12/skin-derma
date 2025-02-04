@@ -1,0 +1,27 @@
+# config.yaml
+development:
+  port: 3000
+  model:
+    path: "./model/model.json"
+    inputSize: [224, 224]
+    outputClasses: ["condition1", "condition2", "condition3"]
+  cors:
+    origin: "http://localhost:3000"
+    
+production:
+  port: 8080
+  model:
+    path: "./model/model.json"
+    inputSize: [224, 224]
+    outputClasses: ["condition1", "condition2", "condition3"]
+  cors:
+    origin: "https://yourproductionsite.com"
+
+# Add this if you plan to use Docker
+docker:
+  image: node:18
+  workdir: /app
+  ports:
+    - "3000:3000"
+  volumes:
+    - ./model:/app/model
