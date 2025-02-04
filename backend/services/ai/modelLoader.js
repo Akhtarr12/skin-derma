@@ -18,131 +18,130 @@ class ModelLoader {
       "Molluscum-Contagiosum", "Nevus", "Normal", 
       "Porokeratosis-Actinic", "Psoriasis", "Tinea-Corporis", "Tungiasis"
     ];
-  }
-
-  sigmoid(x) {
-    return 1 / (1 + Math.exp(-x));
+    // ImageNet mean and std for normalization
+    this.mean = [0.485, 0.456, 0.406];
+    this.std = [0.229, 0.224, 0.225];
   }
 
   async loadModel() {
     try {
       if (!this.model && !this.isLoading) {
         this.isLoading = true;
+        console.log('Loading model from:', this.modelPath);
         const options = {
           executionProviders: ['cpu'],
           graphOptimizationLevel: 'all'
         };
         this.model = await ort.InferenceSession.create(this.modelPath, options);
+        console.log('Model loaded successfully');
+        console.log('Model input names:', this.model.inputNames);
+        console.log('Model output names:', this.model.outputNames);
         this.isLoading = false;
       }
       return this.model;
     } catch (error) {
       this.isLoading = false;
+      console.error('Model loading error:', error);
       throw new Error(`Failed to load AI model: ${error.message}`);
     }
   }
 
   processBase64Image(base64Image) {
     try {
-      // Handle Buffer or Blob directly
       if (base64Image instanceof Buffer) {
         return base64Image;
       }
 
-      // Handle different string formats
       if (typeof base64Image !== 'string') {
         throw new Error('Invalid image input');
       }
 
-      // Remove data URI prefix if present
       const base64Data = base64Image.includes(',') 
         ? base64Image.split(',')[1] 
         : base64Image;
 
-      // Decode Base64 to buffer
       return Buffer.from(base64Data, 'base64');
     } catch (error) {
+      console.error('Base64 processing error:', error);
       throw new Error(`Base64 image processing failed: ${error.message}`);
     }
   }
 
   async preprocessImage(imageBuffer) {
     try {
+      console.log('Starting image preprocessing');
       const metadata = await sharp(imageBuffer).metadata();
-      const originalWidth = metadata.width;
-      const originalHeight = metadata.height;
+      console.log('Original image dimensions:', { width: metadata.width, height: metadata.height });
 
       const processedImage = await sharp(imageBuffer)
         .resize(this.targetSize, this.targetSize, {
-          fit: 'contain',
-          background: { r: 114, g: 114, b: 114 }
+          fit: 'cover',  // Changed to cover to maintain aspect ratio and fill
+          position: 'center'
         })
         .removeAlpha()
         .raw()
         .toBuffer();
 
       const float32Data = new Float32Array(3 * this.targetSize * this.targetSize);
+      
+      // Apply normalization with ImageNet mean and std
       for (let c = 0; c < 3; c++) {
         for (let h = 0; h < this.targetSize; h++) {
           for (let w = 0; w < this.targetSize; w++) {
             const srcIdx = h * this.targetSize * 3 + w * 3 + c;
             const dstIdx = c * this.targetSize * this.targetSize + h * this.targetSize + w;
-            float32Data[dstIdx] = processedImage[srcIdx] / 255.0;
+            float32Data[dstIdx] = (processedImage[srcIdx] / 255.0 - this.mean[c]) / this.std[c];
           }
         }
       }
 
+      console.log('Preprocessing completed');
       return {
         tensor: float32Data,
-        originalDimensions: { width: originalWidth, height: originalHeight }
+        originalDimensions: { width: metadata.width, height: metadata.height }
       };
     } catch (error) {
+      console.error('Preprocessing error:', error);
       throw new Error(`Image preprocessing failed: ${error.message}`);
     }
   }
 
-  processDetections(output, originalDimensions, confidenceThreshold = 0.5) {
-    const data = Array.from(output.data);
-    const numClasses = this.conditions.length;
-    const predictions = [];
-    
-    // Softmax normalization
-    const softmaxScores = data.map((score, index) => {
-      const classIndex = index % numClasses;
-      const exp = Math.exp(score);
-      return {
-        condition: this.conditions[classIndex],
-        score: exp
-      };
-    });
-  
-    // Group and sum scores by condition
-    const groupedScores = softmaxScores.reduce((acc, item) => {
-      if (!acc[item.condition]) {
-        acc[item.condition] = 0;
+  processDetections(output, confidenceThreshold = 0.25) {
+    try {
+      console.log('Processing detections with confidence threshold:', confidenceThreshold);
+      const data = Array.from(output.data);
+      const numClasses = this.conditions.length;
+      
+      // softmax with numerical stability
+      const scores = [];
+      for (let i = 0; i < data.length; i += numClasses) {
+        const classScores = data.slice(i, i + numClasses);
+        const maxScore = Math.max(...classScores);
+        const expScores = classScores.map(score => Math.exp(score - maxScore));
+        const sumExp = expScores.reduce((a, b) => a + b, 0);
+        const softmaxScores = expScores.map(score => score / sumExp);
+        scores.push(...softmaxScores);
       }
-      acc[item.condition] += item.score;
-      return acc;
-    }, {});
-  
-    // Normalize probabilities
-    const totalScore = Object.values(groupedScores).reduce((a, b) => a + b, 0);
-    
-    const normalizedPredictions = Object.entries(groupedScores)
-      .map(([condition, score]) => ({
+
+      //  predictions array with probabilities
+      const predictions = this.conditions.map((condition, idx) => ({
         condition,
-        probability: score / totalScore
+        probability: scores[idx]
       }))
       .filter(pred => pred.probability > confidenceThreshold)
       .sort((a, b) => b.probability - a.probability)
-      .slice(0, 3); // Top 3 predictions
-  
-    return normalizedPredictions;
+      .slice(0, 3);  // top 3 predictions
+
+      console.log('Processed predictions:', predictions);
+      return predictions;
+    } catch (error) {
+      console.error('Detection processing error:', error);
+      throw new Error(`Failed to process detections: ${error.message}`);
+    }
   }
 
   async drawDetections(imageBuffer, predictions) {
     try {
-      const metadata = await sharp(imageBuffer).metadata();
       const scaledImage = await sharp(imageBuffer)
         .resize(800, 600, { fit: 'inside' })
         .toBuffer();
@@ -154,33 +153,36 @@ class ModelLoader {
       img.src = scaledImage;
       ctx.drawImage(img, 0, 0);
       
-      predictions.forEach(pred => {
-        const { condition, probability } = pred;
+      //  prediction boxes with improved styling
+      predictions.forEach((pred, index) => {
+        const yPosition = 30 + (index * 40);  // Stack predictions vertically
         
+        // background box
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(10, 10, 300, 30);
+        ctx.fillRect(10, yPosition - 20, 300, 30);
         
+        //  text
         ctx.fillStyle = '#ffffff';
-        ctx.font = '16px Arial';
+        ctx.font = 'bold 16px Arial';
         ctx.fillText(
-          `${condition}: ${(probability * 100).toFixed(1)}%`,
+          `${pred.condition}: ${(pred.probability * 100).toFixed(1)}%`,
           20,
-          30
+          yPosition
         );
       });
       
-      const base64Image = canvas.toDataURL('image/jpeg');
+      const base64Image = canvas.toDataURL('image/jpeg', 0.9);  // Increased quality
       const base64Data = base64Image.split(',')[1];
-      const annotatedImageBuffer = Buffer.from(base64Data, 'base64');
-      
-      return annotatedImageBuffer;
+      return Buffer.from(base64Data, 'base64');
     } catch (error) {
+      console.error('Drawing error:', error);
       throw new Error(`Failed to draw detections: ${error.message}`);
     }
   }
 
   async predict(base64Image) {
     try {
+      console.log('Starting prediction process');
       const imageBuffer = this.processBase64Image(base64Image);
       const model = await this.loadModel();
       const { tensor: preprocessedData, originalDimensions } = await this.preprocessImage(imageBuffer);
@@ -191,14 +193,23 @@ class ModelLoader {
         [1, 3, this.targetSize, this.targetSize]
       );
 
+      console.log('Running model inference');
       const feeds = { [model.inputNames[0]]: inputTensor };
       const results = await model.run(feeds);
       
       const output = Object.values(results)[0];
-      const predictions = this.processDetections(output, originalDimensions);
+      console.log('Model output shape:', output.dims);
+      console.log('Raw output sample:', Array.from(output.data.slice(0, 5)));
+
+      const predictions = this.processDetections(output);
       
+      if (predictions.length === 0) {
+        console.warn('No predictions above confidence threshold');
+      }
+
       const annotatedImage = await this.drawDetections(imageBuffer, predictions);
       
+      // Save annotated image
       const outputDir = path.join(__dirname, '../../outputs');
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
@@ -206,6 +217,7 @@ class ModelLoader {
       const filename = `annotated_${Date.now()}.jpg`;
       const fullPath = path.join(outputDir, filename);
       fs.writeFileSync(fullPath, annotatedImage);
+      console.log('Saved annotated image to:', fullPath);
 
       return {
         predictions,
