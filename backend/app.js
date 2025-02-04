@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Routes
 const analysisRouter = require('./routes/analysis');
-app.use('/api', analysisRouter); // 👈 Mount analysis routes
+app.use('/api', analysisRouter); //  Mount analysis routes
 
 // Error handling
 app.use((err, req, res, next) => {
