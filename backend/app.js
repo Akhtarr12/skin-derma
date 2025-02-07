@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 require('dotenv').config();
-
 const app = express();
 
 // Middleware
@@ -12,9 +11,9 @@ app.use(express.json());
 
 // Routes
 const analysisRouter = require('./routes/analysis');
-app.use('/api', analysisRouter); //  Mount analysis routes
+app.use('/api', analysisRouter); // Mount analysis routes
 
-// Error handling
+// Error handling middleware.
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Internal server error' });

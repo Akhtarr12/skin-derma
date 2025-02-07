@@ -4,7 +4,13 @@ const multer = require('multer');
 const path = require('path');
 const modelLoader = require('../services/ai/modelLoader');
 
-// Enhanced logging middleware
+// Configure multer to use memory storage.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // Limit file size to 5MB.
+});
+
+// Enhanced logging middleware.
 const logRequestDetails = (req, res, next) => {
   console.log('Request Headers:', req.headers);
   console.log('Content-Type:', req.headers['content-type']);
@@ -12,17 +18,12 @@ const logRequestDetails = (req, res, next) => {
   next();
 };
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
-  }
-});
-
-router.post('/analyze', 
+router.post(
+  '/analyze',
   logRequestDetails,
+  // Use the same field name as your client (here it's "images")
   (req, res, next) => {
-    upload.single('image')(req, res, (err) => {
+    upload.single('images')(req, res, (err) => {
       if (err) {
         console.error('Multer Error:', err);
         return res.status(400).json({ 
@@ -32,11 +33,11 @@ router.post('/analyze',
       }
       next();
     });
-  }, 
+  },
   async (req, res) => {
     try {
       console.log('Received File:', req.file);
-      
+
       if (!req.file) {
         return res.status(400).json({ 
           success: false, 
@@ -44,9 +45,8 @@ router.post('/analyze',
         });
       }
 
-      const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-
-      const result = await modelLoader.predict(base64Image);
+      // Pass the raw buffer directly (do not convert to base64).
+      const result = await modelLoader.predict(req.file.buffer);
 
       res.json({
         success: true,
@@ -55,7 +55,6 @@ router.post('/analyze',
           annotatedImage: result.annotatedImage
         }
       });
-
     } catch (error) {
       console.error('Full Error:', error);
       res.status(500).json({
